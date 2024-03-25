@@ -1,0 +1,409 @@
+---
+title: "Symptom networks"
+author: "Jonathan"
+date: "2/7/2023"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(bootnet) 
+library(countrycode)
+library(psych)
+library(dplyr)
+library(qgraph)
+library(networktools)
+library(igraph)
+library(influenceR)
+library(NetworkComparisonTest)
+```
+
+# data cleaning
+```{r}
+#load data 
+## note that file is seperated by spaces but there are responses with multiple words spaces which causes extra lines to appear
+raw_data <- read.csv("data.csv", head = TRUE, sep="")
+
+#remove extra lines that appeared
+## the extra lines that appeared are just a single word with empty spaces in other columns, so removing NAs is one way of removing them
+raw_data.dat <- na.omit(raw_data) 
+
+#filter those that failed validity check 
+## validity check was provided in the zip-file to the raw data, if they ticked questions 6,9 and 12 means they failed
+### remove any responses that ticked either qn 6, 9 or 12
+raw_data.dat <- raw_data.dat[raw_data.dat$VCL6 != 1| raw_data.dat$VCL9 != 1 |raw_data.dat$VCL12 !=1, ]
+```
+
+# data manipulation 
+```{r}
+#converting isocodes to country names 
+## somewhat unnecessary honestly since I could have used iso codes to subset but I already did it so
+which( colnames(raw_data.dat)=="country" )
+
+country_names.dat <- data.frame(matrix(nrow = nrow(raw_data.dat), ncol = ncol(raw_data.dat)))
+
+country_names.dat$country <- countrycode(sourcevar = raw_data.dat[, "country"],
+                            origin = "iso2c",
+                            destination = "country.name")
+
+unique(country_names.dat$country)
+#kosovo is xk but is not reflected
+
+country_names.dat$continent <- countrycode(sourcevar = raw_data.dat[, "country"],
+                            origin = "iso2c",
+                            destination = "continent")
+
+country_names.dat %>%
+  group_by(country) %>% 
+  count(country) %>% 
+  arrange(desc(.[,2]))
+ 
+#most of data is from Asia
+#500+ people put "NONE"
+
+#selecting just the column with country names (used in the next section)
+country_names.dat <- country_names.dat[, 173]
+
+# ----------------- getting DASS-21 scores --------------------
+#indexes and symptom labels that need to be used subsequently
+col.number.index <- seq(from = 1, to = ncol(raw_data.dat), by = 3)
+
+symptoms.vec <- c("no wind down", "dry mouth", "no positive", "breath difficult", "no initiative", "over-react", "trembling", "nervous energy", "worry about situations", "no look forward", "agitated", "no relax", "down-hearted", "intolerant", "panic", "not enthusiastic", "worthless", "touchy", "heart-aware", "scared", "meaningless")
+
+dass21.vec <- c(22, 2, 3, 4, 42, 6, 41, 12, 40, 10, 39, 8, 26, 35, 28, 31, 17, 18, 25, 20, 38)
+
+#getting just the responses to the 42 symptom questionnaire
+DASS_scores.dat <- raw_data.dat[, col.number.index]
+DASS_scores.dat <- DASS_scores.dat[, -c(43:58)]
+DASS_scores.dat <- mutate_all(DASS_scores.dat, function(x) as.numeric(as.character(x)))
+
+#selecting only the 21 symptoms in the DASS21 instead of the 42
+## dass21.vec is a vector with the column numbers of the questions in the DASS which is included in the DASS21
+DASS21_scores.dat <- DASS_scores.dat[, dass21.vec]
+colnames(DASS21_scores.dat) <- symptoms.vec
+head(DASS21_scores.dat)
+
+#since DASS21 uses 0-3 likert scale whereas the current data is 1-4, I subtracted one across for all the results
+DASS21_scores.dat <- mutate_all(DASS21_scores.dat, function(x) (x-1)) 
+
+#create a final data frame combining individual scores & country
+DASS21_scores.dat <- cbind.data.frame(DASS21_scores.dat, country_names.dat) 
+```
+
+```{r}
+####### Network Estimation of Entire Graph ##########
+set.seed(12345)
+# using the dataframe of DASS21 responses, construct a partial correlation matrix which is used to estimate a network
+## threshold = 'sig' to only include significant edges 
+### note: only include columns 1 to 21 (just the scores) otherwise it doesn't work
+DAS_network <- estimateNetwork(DASS21_scores.dat[, c(1:21)], default = "pcor", 
+                                threshold = 'sig') 
+
+#converting into igraph object so that can visualise
+DAS_igraph <- graph_from_adjacency_matrix(DAS_network$graph, 
+                                                   mode = 'undirected', 
+                                                   weighted = TRUE)
+
+E(DAS_igraph)$weight <- abs(E(DAS_igraph)$weight) #to remove any negative weights
+
+summary(DAS_igraph) #21 nodes and 154 edges 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+
+#plotting the graph 
+plot(DAS_network,
+     vertex.frame.color = 'white', 
+     vertex.size = 10, 
+     vertex.label.dist = 1.5,
+     vertex.label.size = 1,
+     title = "Symptom network of depression, anxiety and stress")
+
+```
+
+#centrality measures (strength centrality)
+
+```{r}
+#construct a visual representation of strength centrality value of symptoms 
+centralityPlot(DAS_network, include = c("Strength"), scale = "z-scores", labels = colnames(DASS21_scores.dat[,c(1:21)]))
+
+#same thing but in a table format, rounded off to 3 s.f.
+strength.table <- strength(DAS_igraph) %>% round(3) 
+
+strength.table %>% sort(decreasing = TRUE) %>% head(3) #get top 3 by sorting from largest to smallest
+
+#panic, worthless, meaningless
+
+```
+
+#community detection using the walktrap algorithm
+```{r}
+set.seed(12345)
+#employing walk-trap algorithm to find communities 
+DAS_walktrap <- cluster_walktrap(DAS_igraph, weights = E(DAS_igraph)$weight)
+modularity(DAS_walktrap) #modularity is 0.332
+
+DAS_walktrap_membership <- data.frame(node = 1:gorder(DAS_igraph), community = DAS_walktrap$membership)
+table(DAS_walktrap_membership$community) # 3 communities 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+
+V(DAS_igraph)$community <- DAS_walktrap$membership
+
+plot(DAS_igraph, vertex.color=V(DAS_igraph)$community, 
+     vertex.size = 7, 
+     layout = layout_with_lgl)
+
+#creating a vector which has the symptoms listed under each of the subscales according to the DASS21
+subscale.vec <- c()
+subscale.vec[c(1,6,8,11,12,14,18)] = "stress"
+subscale.vec[c(2,4,7,9,15,19,20)] = "anxiety"
+subscale.vec[c(3,5,10,13,16,17,21)] = "depression"
+community <- data.frame(symptoms = symptoms.vec, community = DAS_walktrap_membership$community, subscale = subscale.vec)
+
+#comparing how the community aligns with the earlier subscales 
+community %>%
+  arrange(community) #nervous energy falls under anxiety instead of stress
+
+
+```
+
+#centrality measure (bridging centrality)
+```{r}
+#bridging links of all 3 (depression, anxiety and stress)
+bridge.all <- bridge(DAS_igraph,
+  communities = DAS_walktrap_membership$community,
+  useCommunities = "all", 
+  directed = FALSE,
+  nodes = colnames(DASS21_scores.dat[,c(1:21)]),
+  normalize = TRUE)
+
+plot(bridge.all, include = c("Bridge Strength"), order = "value", zscore = TRUE) # no relax, nervous energy, worry about situations
+
+V(DAS_igraph)$color <- 'pink'
+V(DAS_igraph)[name %in% c('was', 'agt', 'nrl')]$color <- 'gold' # highest
+
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+
+plot(DAS_igraph, vertex.frame.color = 'black', vertex.label.family = 'sans',
+     vertex.size = 10, vertex.color = V(DAS_igraph)$color, vertex.label.cex = 0.8,
+     vertex.label.color = 'navy')
+
+#bridging links of depression and anxiety
+bridge.dep_anx <- bridge(DAS_igraph,
+  communities = DAS_walktrap_membership$community,
+  useCommunities = c(1,2), 
+  directed = FALSE,
+  nodes = colnames(DASS21_scores.dat[,c(1:21)]),
+  normalize = TRUE)
+
+
+plot(bridge.dep_anx, include = c("Bridge Strength"), order = "value", zscore = TRUE)
+
+#getting top 3 by sorting 
+sort(desc(bridge.dep_anx$`Bridge Expected Influence (1-step)`)) %>%  head(3) 
+#worthless, worry about situations, scared
+```
+#responses from different countries
+```{r}
+#Malaysian sample
+malaysian_subset <- subset(DASS21_scores.dat, DASS21_scores.dat$country_names.dat == "Malaysia")
+
+#US sample
+us_subset <- subset(DASS21_scores.dat, DASS21_scores.dat$country_names.dat == "United States")
+
+#SG sample?
+sg_subset <- subset(DASS21_scores.dat, DASS21_scores.dat$country_names.dat == "Singapore")
+
+```
+
+```{r}
+#####network estimation of different countries#####
+set.seed(12345)
+#partial correlation matrix for malaysian subset
+msia_network <- estimateNetwork(malaysian_subset[, c(1:21)], default = "pcor", 
+                                threshold = 'sig', signed = FALSE) 
+
+msia_igraph <- graph_from_adjacency_matrix(msia_network$graph, 
+                                                   mode = 'undirected', 
+                                                   weighted = TRUE)
+
+E(msia_igraph)$weight <- abs(E(msia_igraph)$weight) # to remove negative edge weights 
+
+summary(msia_igraph) #21 nodes and 159 edges 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+plot(msia_network,
+     title = "Malaysia Symptom Network")
+
+
+#pcor for sg subset
+sg_network <- estimateNetwork(sg_subset[, c(1:21)], default = "pcor", 
+                                threshold = 'sig', signed = FALSE) 
+
+sg_igraph <- graph_from_adjacency_matrix(sg_network$graph, 
+                                                   mode = 'undirected', 
+                                                   weighted = TRUE)
+
+E(sg_igraph)$weight <- abs(E(sg_igraph)$weight) # to remove negative edge weights 
+
+summary(sg_igraph) #21 nodes and 34 edges 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+plot(sg_network, title = "Singapore Symptom Network")
+
+
+
+#partial correlation matrix for us subset
+us_network <- estimateNetwork(us_subset[, c(1:21)], default = "pcor", 
+                                threshold = 'sig',  signed = FALSE) 
+
+us_igraph <- graph_from_adjacency_matrix(us_network$graph, 
+                                                   mode = 'undirected', 
+                                                   weighted = TRUE)
+E(us_igraph)$weight <- abs(E(us_igraph)$weight) #to remove negative edge weights 
+
+summary(us_igraph) #21 nodes and 119 edges 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+plot(us_network,
+     title = "US Symptom Network")
+```
+
+```{r}
+###### Centrality measures for subsetted graphs ######
+#msia graph
+centralityPlot(msia_network, include = c("Strength"), scale = "z-scores", labels = colnames(DASS21_scores.dat[,c(1:21)]))
+
+strength(msia_igraph) %>% round(3) %>% sort(decreasing = TRUE)
+#meaningless, panic, no relax
+
+#sg graph
+centralityPlot(sg_network, include = c("Strength"), scale = "raw", labels = colnames(DASS21_scores.dat[,c(1:21)]))
+
+strength(sg_igraph) %>% round(3) %>% sort(decreasing = TRUE)
+#no relax, meaningless, no enthusiasm
+
+#us graph
+centralityPlot(us_network, include = c("Strength"), scale = "raw", labels = colnames(DASS21_scores.dat[,c(1:21)]))
+
+strength(us_igraph) %>% round(3) %>%  sort(decreasing = TRUE)
+#panic, meaningless, worthless
+
+```
+
+#community detection of seperate countries
+```{r}
+set.seed(12345)
+#msia
+msia_walktrap <- cluster_walktrap(msia_igraph, weights = E(msia_igraph)$weight)
+modularity(msia_walktrap) #modularity is 0.264
+
+msia_walktrap_membership <- data.frame(node = 1:gorder(msia_igraph), community = msia_walktrap$membership)
+table(msia_walktrap_membership$community) # 4 communities?
+#seems like anxiety and stress more inter-related 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+V(msia_igraph)$community <- msia_walktrap$membership
+
+plot(msia_igraph, vertex.color=V(msia_igraph)$community, 
+     vertex.size = 7, 
+     layout = layout_with_lgl)
+
+subscale.vec <- c()
+subscale.vec[c(1,6,8,11,12,14,18)] = "stress"
+subscale.vec[c(2,4,7,9,15,19,20)] = "anxiety"
+subscale.vec[c(3,5,10,13,16,17,21)] = "depression"
+community <- data.frame(symptoms = symptoms.vec, community = msia_walktrap_membership$community, subscale = subscale.vec)
+community %>%
+  arrange(community) 
+
+#sg
+sg_walktrap <- cluster_walktrap(sg_igraph, weights = E(sg_igraph)$weight)
+modularity(sg_walktrap) #modularity is 0.456
+
+sg_walktrap_membership <- data.frame(node = 1:gorder(sg_igraph), community = sg_walktrap$membership)
+table(sg_walktrap_membership$community) # 4 communities also
+#seems like anxiety and stress more inter-related 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+
+V(sg_igraph)$community <- sg_walktrap$membership
+
+plot(sg_igraph, vertex.color=V(sg_igraph)$community, 
+     vertex.size = 7, 
+     layout = layout_with_lgl)
+
+subscale.vec <- c()
+subscale.vec[c(1,6,8,11,12,14,18)] = "stress"
+subscale.vec[c(2,4,7,9,15,19,20)] = "anxiety"
+subscale.vec[c(3,5,10,13,16,17,21)] = "depression"
+community <- data.frame(symptoms = symptoms.vec, community = msia_walktrap_membership$community, subscale = subscale.vec)
+community %>%
+  arrange(community) 
+
+#us
+us_walktrap <- cluster_walktrap(us_igraph, weights = E(us_igraph)$weight)
+modularity(us_walktrap) #modularity is 0.387
+
+us_walktrap_membership <- data.frame(node = 1:gorder(us_igraph), community = us_walktrap$membership)
+table(us_walktrap_membership$community) # 3 communities! 
+
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+
+V(us_igraph)$community <- us_walktrap$membership
+
+plot(us_igraph, vertex.color=V(us_igraph)$community, 
+     vertex.size = 7, 
+     layout = layout_with_lgl)
+
+subscale.vec <- c()
+subscale.vec[c(1,6,8,11,12,14,18)] = "stress"
+subscale.vec[c(2,4,7,9,15,19,20)] = "anxiety"
+subscale.vec[c(3,5,10,13,16,17,21)] = "depression"
+community <- data.frame(symptoms = symptoms.vec, community = us_walktrap_membership$community, subscale = subscale.vec)
+community %>%
+  arrange(community) # nervous energy as the outlier 
+
+```
+
+```{r}
+##### bridging links of subsetted graphs #####
+#msia with 4 clusters
+msia.bridge.obj <- bridge(msia_igraph,
+  communities = msia_walktrap_membership$community,
+  useCommunities = "all", 
+  directed = FALSE,
+  nodes = colnames(DASS21_scores.dat[,c(1:21)]),
+  normalize = TRUE)
+
+plot(msia.bridge.obj, include = c("Bridge Strength"), order = "value", zscore = TRUE)
+
+sort(desc(msia.bridge.obj$`Bridge Expected Influence (1-step)`)) %>% head(3) #no relax, agitated, worry about situations
+
+#sg bridge
+sg.bridge.obj <- bridge(sg_igraph,
+  communities = sg_walktrap_membership$community,
+  useCommunities = "all", 
+  directed = FALSE,
+  nodes = colnames(DASS21_scores.dat[,c(1:21)]),
+  normalize = TRUE)
+
+plot(sg.bridge.obj, include = c("Bridge Strength"), order = "value", zscore = TRUE)
+
+#nervous energy, trembling, over-react 
+
+#us
+us.bridge.obj <- bridge(us_igraph,
+  communities = us_walktrap_membership$community,
+  useCommunities = "all", 
+  directed = FALSE,
+  nodes = colnames(DASS21_scores.dat[,c(1:21)]),
+  normalize = TRUE)
+
+plot(us.bridge.obj, include = c("Bridge Strength"), order = "value", zscore = TRUE)
+
+sort(desc(us.bridge.obj$`Bridge Expected Influence (1-step)`)) %>% head(3) 
+#no relax, nervous energy, worry about situation
+```
+
