@@ -25,7 +25,6 @@ library(NetworkComparisonTest)
 raw_data <- read.csv("data.csv", head = TRUE, sep="")
 
 #remove extra lines that appeared
-## the extra lines that appeared are just a single word with empty spaces in other columns, so removing NAs is one way of removing them
 raw_data.dat <- na.omit(raw_data) 
 
 #filter those that failed validity check 
@@ -37,7 +36,6 @@ raw_data.dat <- raw_data.dat[raw_data.dat$VCL6 != 1| raw_data.dat$VCL9 != 1 |raw
 # data manipulation 
 ```{r}
 #converting isocodes to country names 
-## somewhat unnecessary honestly since I could have used iso codes to subset but I already did it so
 which( colnames(raw_data.dat)=="country" )
 
 country_names.dat <- data.frame(matrix(nrow = nrow(raw_data.dat), ncol = ncol(raw_data.dat)))
