@@ -1,8 +1,8 @@
 # Network Analysis of Comorbid Mental Symptoms
-This project involved an analysis of the Depression, Anxiety, Stress Scale (DASS-21) using a network perspective framework. 
+This project involved an analysis of the Depression, Anxiety, Stress Scale (DASS-21) using a network perspective, that is, to conceptualize symptoms as a set of interconnected nodes. 
 
-In this analysis, I used network analysis to identify potential target symptoms which are hypothesized to reduce the severity of the disorder. 
-Additionally, using the findings I offer possible reasons for why current treatments may or mau not be as successful in treating comorbid (i.e., concurrent) disorders. 
+In this analysis, I identified potential target symptoms which (theoretically) reduce the severity of the disorder. 
+Additionally, I offer possible reasons for why current treatments may or may not be as successful in treating comorbid (i.e., concurrent) disorders. 
 
 Inside this repository you will find the following:
 - Network_Analysis.Rmd -- contains the Rmarkdown script that was used to conduct the analysis 
