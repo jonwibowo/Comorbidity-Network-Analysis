@@ -9,4 +9,5 @@ Inside this repository you will find the following:
 - data.csv -- raw data obtained from the open psychometrics website 
 
 Completed as part of the course requirements for PL4246 (Networks in Psychology) in NUS 
+
 Grade Obtained: A+
